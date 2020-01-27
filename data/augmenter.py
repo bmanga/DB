@@ -1,4 +1,6 @@
 import imgaug
+import numpy
+numpy.random.bit_generator = numpy.random._bit_generator
 import imgaug.augmenters as iaa
 
 from concern.config import Configurable, State
