@@ -144,8 +144,6 @@ class Bottleneck(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.downsample = downsample
         self.stride = stride
-        self.dcn = dcn
-        self.with_dcn = dcn is not None
 
     def forward(self, x):
         print("forward")

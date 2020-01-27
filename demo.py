@@ -134,6 +134,9 @@ class Demo:
         batch['shape'] = [original_shape]
         with torch.no_grad():
             batch['image'] = img
+            traced = torch.jit.trace(model, img)
+            traced.save("hurray.pt")
+            print("Trace saved")
             pred = model.forward(batch, training=False)
             output = self.structure.representer.represent(batch, pred, is_output_polygon=self.args['polygon']) 
             if not os.path.isdir(self.args['result_dir']):
