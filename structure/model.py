@@ -15,8 +15,21 @@ class BasicModel(nn.Module):
         self.backbone = getattr(backbones, args['backbone'])(**args.get('backbone_args', {}))
         self.decoder = getattr(decoders, args['decoder'])(**args.get('decoder_args', {}))
 
-    def forward(self, data, *args, **kwargs):
-        return self.decoder(self.backbone(data), *args, **kwargs)
+    # def forward(self, data, *args, **kwargs):
+    def forward(self, data, training=False):
+        # return self.decoder(self.backbone(data), *args, **kwargs)
+        return self.decoder(self.backbone(data), training)
+
+
+class ScriptableDataParallel(nn.Module):
+
+    def __init__(self, module, device_ids=None, output_device=None, dim=0):
+        super(ScriptableDataParallel, self).__init__()
+        
+        self.module = module
+
+    def forward(self, x, training=False):
+        return self.module(x, training)
 
 
 def parallelize(model, distributed, local_rank):
@@ -27,7 +40,8 @@ def parallelize(model, distributed, local_rank):
             output_device=[local_rank],
             find_unused_parameters=True)
     else:
-        return nn.DataParallel(model)
+        # return nn.DataParallel(model)
+        return ScriptableDataParallel(model)
 
 class SegDetectorModel(nn.Module):
     def __init__(self, args, device, distributed: bool = False, local_rank: int = 0):
@@ -53,7 +67,9 @@ class SegDetectorModel(nn.Module):
         else:
             data = batch.to(self.device)
         data = data.float()
+        print("model forward")
         pred = self.model(data, training=self.training)
+        print(pred)
 
         if self.training:
             for key, value in batch.items():

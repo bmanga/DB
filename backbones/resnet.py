@@ -105,18 +105,22 @@ class Bottleneck(nn.Module):
 
     def __init__(self, inplanes, planes, stride=1, downsample=None, dcn=None):
         super(Bottleneck, self).__init__()
+        print("called at all?")
         self.with_dcn = dcn is not None
         self.conv1 = nn.Conv2d(inplanes, planes, kernel_size=1, bias=False)
         self.bn1 = BatchNorm2d(planes)
         fallback_on_stride = False
         self.with_modulated_dcn = False
         if self.with_dcn:
+            print("with_dcn")
             fallback_on_stride = dcn.get('fallback_on_stride', False)
             self.with_modulated_dcn = dcn.get('modulated', False)
         if not self.with_dcn or fallback_on_stride:
             self.conv2 = nn.Conv2d(planes, planes, kernel_size=3,
                                    stride=stride, padding=1, bias=False)
+            print("not with_dcn")
         else:
+            print("not fallback_on_stride")
             deformable_groups = dcn.get('deformable_groups', 1)
             if not self.with_modulated_dcn:
                 from assets.ops.dcn import DeformConv
@@ -130,6 +134,7 @@ class Bottleneck(nn.Module):
                 planes, deformable_groups * offset_channels,
                 kernel_size=3,
                 padding=1)
+            print("self.conv2_offset defined")
             self.conv2 = conv_op(
                 planes, planes, kernel_size=3, padding=1, stride=stride,
                 deformable_groups=deformable_groups, bias=False)
@@ -143,6 +148,7 @@ class Bottleneck(nn.Module):
         self.with_dcn = dcn is not None
 
     def forward(self, x):
+        print("forward")
         residual = x
 
         out = self.conv1(x)
