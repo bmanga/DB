@@ -107,10 +107,13 @@ class ModulatedDeformConv(nn.Module):
         self.weight = nn.Parameter(
             torch.Tensor(out_channels, in_channels // groups,
                          *self.kernel_size))
+        '''
         if bias:
             self.bias = nn.Parameter(torch.Tensor(out_channels))
         else:
             self.register_parameter('bias', None)
+        '''
+        self.bias = nn.Parameter(torch.Tensor(out_channels))
         self.reset_parameters()
 
     def reset_parameters(self):

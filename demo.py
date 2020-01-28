@@ -126,6 +126,7 @@ class Demo:
         self.init_torch_tensor()
         model = self.init_model()
         self.resume(model, self.model_path)
+        model = torch.jit.load("hurray.pt")
         all_matircs = {}
         model.eval()
         batch = dict()
@@ -134,10 +135,11 @@ class Demo:
         batch['shape'] = [original_shape]
         with torch.no_grad():
             batch['image'] = img
-            traced = torch.jit.trace(model, img)
-            traced.save("hurray.pt")
-            print("Trace saved")
-            pred = model.forward(batch, training=False)
+            #traced = torch.jit.trace(model, img)
+            #traced.save("hurray.pt")
+            #print("Trace saved")
+            #pred = model.forward(img, training=False)
+            pred = model.forward(img)
             output = self.structure.representer.represent(batch, pred, is_output_polygon=self.args['polygon']) 
             if not os.path.isdir(self.args['result_dir']):
                 os.mkdir(self.args['result_dir'])

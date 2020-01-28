@@ -4,7 +4,6 @@ from torch.nn.modules.utils import _pair
 
 from .. import deform_conv_cuda
 
-
 class DeformConvFunction(Function):
 
     @staticmethod
@@ -178,4 +177,8 @@ class ModulatedDeformConvFunction(Function):
 
 
 deform_conv = DeformConvFunction.apply
-modulated_deform_conv = ModulatedDeformConvFunction.apply
+use_ops = True
+if use_ops:
+    modulated_deform_conv = torch.ops.torchvision.modulated_deform_conv
+else:
+    modulated_deform_conv = ModulatedDeformConvFunction.apply

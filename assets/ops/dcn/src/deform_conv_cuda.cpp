@@ -2,6 +2,14 @@
 // https://github.com/chengdazhi/Deformable-Convolution-V2-PyTorch/blob/mmdetection/mmdet/ops/dcn/src/deform_conv_cuda.c
 
 #include <torch/extension.h>
+#include <torch/csrc/autograd/VariableTypeUtils.h>
+#include <torch/csrc/autograd/function.h>
+#include <torch/csrc/autograd/functions/utils.h>
+#include <torch/csrc/autograd/saved_variable.h>
+#include <torch/csrc/autograd/variable.h>
+#include "torch/script.h"
+
+
 
 #include <cmath>
 #include <vector>
@@ -693,3 +701,244 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         &modulated_deform_conv_cuda_backward,
         "modulated deform conv backward (CUDA)");
 }
+
+
+
+/************* MY EXTENSION ****************/
+using torch::Tensor;
+using torch::autograd::variable_list;
+
+
+struct ModulatedDeformConvFunctionBackward : public torch::autograd::TraceableFunction {
+  variable_list apply(variable_list&& grads) override;
+  std::string name() const override {
+    return "ModulatedDeformConvFunctionBackward";
+  }
+  void release_variables() override {
+    input_.reset_data();
+    input_.reset_grad_function();
+    
+    offset_.reset_data();
+    offset_.reset_grad_function();
+    
+    mask_.reset_data();
+    mask_.reset_grad_function();
+    
+    weight_.reset_data();
+    weight_.reset_grad_function();
+    
+    bias_.reset_data();
+    bias_.reset_grad_function();
+  }
+  torch::autograd::SavedVariable input_, offset_, mask_, weight_, bias_, ones_, columns_;
+  int stride, padding, dilation, groups, deformable_groups;
+  bool with_bias;
+};
+
+variable_list ModulatedDeformConvFunctionBackward::apply(variable_list&& grads) {
+  variable_list grad_inputs(5);
+  auto& grad_output = grads[0];
+  if (should_compute_output(0)) {
+    /*
+    void modulated_deform_conv_cuda_backward(
+    //at::Tensor input, 
+    //at::Tensor weight, 
+    //at::Tensor bias, 
+    -->at::Tensor ones,
+    //at::Tensor offset,
+    //at::Tensor mask, 
+    -->at::Tensor columns,
+    //at::Tensor grad_input, 
+    //at::Tensor grad_weight, 
+    //at::Tensor grad_bias,
+    //at::Tensor grad_offset, 
+    //at::Tensor grad_mask, 
+    //at::Tensor grad_output,
+    int kernel_h, 
+    int kernel_w, 
+    int stride_h, 
+    int stride_w, 
+    int pad_h,
+    int pad_w, 
+    int dilation_h, 
+    int dilation_w, 
+    int group, 
+    int deformable_group,
+    const bool with_bias)
+    */
+    auto offset = offset_.unpack();
+    auto bias = bias_.unpack();
+    auto weight = weight_.unpack();
+    auto input = input_.unpack();
+    auto mask = mask_.unpack();
+
+    auto kernel_h = weight.size(2);
+    auto kernel_w = weight.size(3);
+
+    auto grad_input = torch::zeros_like(input);
+    auto grad_offset = torch::zeros_like(offset);
+    auto grad_mask = torch::zeros_like(mask);
+    auto grad_weight = torch::zeros_like(weight);
+    auto grad_bias = torch::zeros_like(bias);
+
+    auto ones = ones_.unpack();
+    auto columns = columns_.unpack();
+
+    modulated_deform_conv_cuda_backward(
+      input, weight, bias, ones, offset, mask, columns,
+      grad_input, grad_weight, grad_bias, grad_offset, grad_mask, grad_output,
+      kernel_h, kernel_w, stride, stride, padding, padding, dilation, dilation,
+      groups,
+      deformable_groups,
+      with_bias
+    );
+
+    grad_inputs[0] = grad_input;
+    grad_inputs[1] = grad_offset;
+    grad_inputs[2] = grad_mask;
+    grad_inputs[3] = grad_weight;
+    grad_inputs[4] = grad_bias;
+  }
+    
+  return grad_inputs;
+}
+
+static inline Tensor get_uninit_output(const Tensor &input, const Tensor &weight, const int padding, const int dilation, const int stride){
+        auto n = input.size(0);
+        auto channels_out = weight.size(0);
+        auto height = input.size(2);
+        auto width = input.size(3);
+        auto kernel_h = weight.size(2);
+        auto kernel_w = weight.size(3);
+        auto height_out = (height + 2 * padding -
+                      (dilation * (kernel_h - 1) + 1)) / stride + 1;
+        auto width_out = (width + 2 * padding -
+                     (dilation * (kernel_w - 1) + 1)) / stride + 1;
+        //return n, channels_out, height_out, width_out
+        return input.new_empty({n, channels_out, height_out, width_out});
+}
+
+Tensor modulated_deform_conv(
+    const Tensor& input,
+    const Tensor& offset,
+    const Tensor& mask,
+    const Tensor& weight,
+    const Tensor& bias,
+    const int64_t stride,
+    const int64_t padding,
+    const int64_t dilation,
+    const int64_t groups,
+    const int64_t deformable_groups) {
+
+
+  TORCH_CHECK(input.defined() && input.is_variable(), "invalid argument input");
+  //TORCH_CHECK(rois.defined() && rois.is_variable(), "invalid argument rois");
+  // we might error out if rois requires grad...
+  
+  //auto& input_ = torch::autograd::as_variable_ref(input);
+  //auto& rois_ = torch::autograd::as_variable_ref(rois);
+  std::shared_ptr<ModulatedDeformConvFunctionBackward> grad_fn;
+  if (torch::autograd::compute_requires_grad(input, offset, mask, weight)) {
+    grad_fn = std::shared_ptr<ModulatedDeformConvFunctionBackward>(
+        new ModulatedDeformConvFunctionBackward(), torch::autograd::deleteNode);
+    // FIXME: Do we need other tensors?
+    grad_fn->set_next_edges(torch::autograd::collect_next_edges(input));
+
+    /*
+      torch::autograd::SavedVariable input_, offset_, mask_, weight_, bias_;
+      int stride, padding, dilation, groups, deformable_groups;
+      bool with_bias;
+      */
+    grad_fn->input_ = torch::autograd::SavedVariable(input, false);
+    grad_fn->offset_ = torch::autograd::SavedVariable(offset, false);
+    grad_fn->mask_ = torch::autograd::SavedVariable(mask, false);
+    grad_fn->weight_ = torch::autograd::SavedVariable(weight, false);
+    grad_fn->bias_ = torch::autograd::SavedVariable(bias, false);
+
+
+    grad_fn->stride = stride;
+    grad_fn->padding = padding;
+    grad_fn->dilation = dilation;
+    grad_fn->groups = groups;
+    grad_fn->deformable_groups = deformable_groups;
+    grad_fn->with_bias = false; // TODO: HARDCODED
+  }
+  
+  auto kernel_h = weight.size(2);
+  auto kernel_w = weight.size(3);
+
+  auto ones = input.new_empty(0);
+  auto columns = input.new_empty(0);
+  auto output = get_uninit_output(input, weight, padding, dilation, stride);
+
+  auto tmp = ([&]() {
+    at::AutoNonVariableTypeMode non_var_type_mode(true);
+/*
+    modulated_deform_conv_cuda_forward(
+    //at::Tensor input, 
+    //at::Tensor weight, 
+    //at::Tensor bias, 
+    //at::Tensor ones,
+    //at::Tensor offset, 
+    //at::Tensor mask, 
+    //at::Tensor output, 
+    //at::Tensor columns,
+    //int kernel_h, 
+    //int kernel_w, 
+    const int stride_h, 
+    const int stride_w,
+    const int pad_h, 
+    const int pad_w, 
+    const int dilation_h,
+    const int dilation_w, 
+    const int group, 
+    const int deformable_group,
+    const bool with_bias) {*/
+    modulated_deform_conv_cuda_forward(
+        input,
+        weight,
+        bias,
+        ones,
+        offset,
+        mask,
+        output,
+        columns,
+        kernel_h,
+        kernel_w,
+        stride,
+        stride,
+        padding,
+        padding,
+        dilation,
+        dilation,
+        groups,
+        deformable_groups,
+        // FIXME: HARDCODED
+        /*with_bias*/false);
+    return output;
+    })();
+
+  auto result = torch::autograd::make_variable(tmp);
+  
+  if (grad_fn) {
+    grad_fn->ones_ = torch::autograd::SavedVariable(ones, false);
+    grad_fn->columns_ = torch::autograd::SavedVariable(columns, false);
+
+    set_history(torch::autograd::flatten_tensor_args(result), grad_fn);
+  }
+  
+  return result;
+}
+
+static auto registry = torch::RegisterOperators()
+  .op("torchvision::modulated_deform_conv("
+    "Tensor input,"
+    "Tensor offset,"
+    "Tensor mask,"
+    "Tensor weight,"
+    "Tensor bias,"
+    "int stride,"
+    "int padding,"
+    "int dilation,"
+    "int groups,"
+    "int deformable_groups) -> Tensor", &modulated_deform_conv);
